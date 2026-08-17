@@ -88,10 +88,10 @@ export type SetRouteAttributesCallback = (params: SetRouteAttributesCallbackPara
  * Why a link could not be routed by avoid:
  * - `'unconnected'` - one or both ends aren't connected to a cell at all.
  * - `'unsupported'` - one or both ends are connected to another link, which avoid cannot route to.
- * - `'untracked-element'` - both ends are connected to an element, but at least
+ * - `'untracked'` - both ends are connected to an element, but at least
  *   one of those elements is excluded from the router via `trackElement`.
  */
-export type UnroutableReason = 'unconnected' | 'untracked-element' | 'unsupported';
+export type UnroutableReason = 'unconnected' | 'untracked' | 'unsupported';
 
 /** Parameters passed to an {@link UnroutableLinkCallback}. */
 export type UnroutableLinkCallbackParameters = {
@@ -988,7 +988,7 @@ export class RouterService {
         }
 
         // Avoid cannot route a link that is connected to an element that is excluded from routing.
-        return 'untracked-element';
+        return 'untracked';
     }
 
     /**
