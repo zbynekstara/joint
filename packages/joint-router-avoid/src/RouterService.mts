@@ -608,8 +608,11 @@ export class RouterService {
                 const side = rect.sideNearestToPoint({ x, y }) as keyof typeof this.connectionDirections;
                 pins.push({
                     id: this.getConnectionPinId(element.id, portId),
-                    x: x / width,
-                    y: y / height,
+                    // Guard against zero-size elements - dividing by a zero
+                    // dimension would feed NaN/Infinity pin coordinates into
+                    // the avoid WASM module.
+                    x: width ? x / width : 0,
+                    y: height ? y / height : 0,
                     connectionDirection: this.connectionDirections[side]
                 });
             });
@@ -741,7 +744,8 @@ export class RouterService {
                 this.options.setRouteAttributes({
                     link,
                     attributes,
-                    origin: 'avoid'
+                    origin: 'avoid',
+                    routing: false
                 });
             } else {
                 link.set(attributes, { [this.changeFlag]: true });
