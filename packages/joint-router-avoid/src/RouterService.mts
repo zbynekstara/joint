@@ -735,29 +735,45 @@ export class RouterService {
             vertices: updatedRoute.vertices
         };
 
-        this.applyingRoute = true;
         // trigger change on vertices setter to update the link view
-        if (this.options.setRouteAttributes) {
-            try {
+        this.applySafely(link, () => {
+            if (this.options.setRouteAttributes) {
                 this.options.setRouteAttributes({
                     link,
                     attributes,
                     origin: 'avoid'
                 });
-            } finally {
-                this.applyingRoute = false;
+            } else {
+                link.set(attributes, { [this.changeFlag]: true });
             }
-            this.setRouted(link, { origin: 'avoid' });
-            return;
-        }
-
-        try {
-            link.set(attributes, { [this.changeFlag]: true });
-        } finally {
-            this.applyingRoute = false;
-        }
+        });
 
         this.setRouted(link, { origin: 'avoid' });
+    }
+
+    /**
+     * Runs `apply` (the consumer's `setRouteAttributes` callback, or a
+     * `link.set()` call whose `change` events consumer listeners may react
+     * to) with the {@link applyingRoute} re-entrancy guard held. If `apply`
+     * throws, any open routing cycle of `link` is closed via
+     * `link:routing:cancelled` before the error propagates, so a buggy
+     * consumer callback/listener cannot leave the link stuck "routing".
+     *
+     * @param link - The link the attributes are being applied to.
+     * @param apply - Applies the attributes.
+     */
+    private applySafely(link: dia.Link, apply: () => void): void {
+        let applied = false;
+        this.applyingRoute = true;
+        try {
+            apply();
+            applied = true;
+        } finally {
+            this.applyingRoute = false;
+            if (!applied && this.pendingLinks.has(link)) {
+                this.setRoutingCanceled(link);
+            }
+        }
     }
 
     /**
@@ -787,10 +803,8 @@ export class RouterService {
             vertices: rightAngleVertices
         };
 
-        this.applyingRoute = true;
-
-        if (this.options.setRouteAttributes) {
-            try {
+        this.applySafely(link, () => {
+            if (this.options.setRouteAttributes) {
                 this.options.setRouteAttributes({
                     link,
                     attributes,
@@ -798,23 +812,10 @@ export class RouterService {
                     routing: !!options.routing,
                     unroutableReason: options.reason,
                 });
-            } finally {
-                this.applyingRoute = false;
-            }
-            if (options.routing) {
-                this.setRouting(link);
             } else {
-                this.setRouted(link, { origin: 'fallback', reason: options.reason });
+                link.set(attributes, { [this.changeFlag]: true });
             }
-
-            return;
-        }
-
-        try {
-            link.set(attributes, { [this.changeFlag]: true });
-        } finally {
-            this.applyingRoute = false;
-        }
+        });
 
         if (options.routing) {
             this.setRouting(link);
