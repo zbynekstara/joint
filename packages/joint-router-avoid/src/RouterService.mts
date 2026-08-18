@@ -308,12 +308,27 @@ export class RouterService {
             remove: (cell: dia.Cell) => this.onCellRemoved(cell),
             add: (cell: dia.Cell) => this.onCellAdded(cell),
             change: (cell: dia.Cell, opt: dia.Cell.Options) => this.onCellChanged(cell, opt),
-            reset: (_collection: unknown) => this.sync(this.graph.getCells()),
+            reset: () => this.backgroundSync(),
         });
 
         this.graphListener = listener;
 
-        this.sync(this.graph.getCells());
+        this.backgroundSync();
+    }
+
+    /**
+     * Runs {@link sync} for the whole graph with no caller to await it
+     * (from {@link start} and the graph `reset` event), swallowing the
+     * rejection produced when {@link destroy} interrupts the sync so a
+     * normal teardown does not surface as an unhandled promise rejection.
+     * Unexpected errors are re-thrown and stay unhandled - there is no
+     * caller to propagate them to.
+     */
+    private backgroundSync(): void {
+        this.sync(this.graph.getCells()).catch((error) => {
+            if (this.destroyed) return;
+            throw error;
+        });
     }
 
     /** Stops listening to graph changes. */
