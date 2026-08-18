@@ -661,12 +661,15 @@ export class RouterService {
 
     /**
      * Marks `link` as having an in-flight routing computation and emits
-     * `link:routing`. Every call must be paired with a later {@link setRouted}
-     * call for the same link, closing the cycle.
+     * `link:routing`. A no-op when the link's routing cycle is already
+     * open (e.g. repeated changes while dragging), so each `link:routing`
+     * is paired with exactly one later `link:routed`/
+     * `link:routing:cancelled` closing the cycle.
      *
      * @param link - The link entering a routing cycle.
      */
     private setRouting(link: dia.Link): void {
+        if (this.pendingLinks.has(link)) return;
         this.pendingLinks.add(link);
         this.trigger('link:routing', link);
     }
