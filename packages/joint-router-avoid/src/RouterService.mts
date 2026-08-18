@@ -108,6 +108,16 @@ export type UnroutableLinkCallbackParameters = {
  */
 export type UnroutableLinkCallback = (params: UnroutableLinkCallbackParameters) => boolean;
 
+/**
+ * Outcome of a one-shot routing pass ({@link RouterService.routeAll} /
+ * {@link RouterService.routeSubgraph}): `'done'` when every route was
+ * applied, `'cancelled'` when the pass was interrupted by
+ * {@link RouterService.destroy} before completing.
+ */
+export interface RoutingResult {
+    status: 'done' | 'cancelled';
+}
+
 /** Options used to configure a {@link RouterService} instance. */
 export interface RouterServiceOptions {
     /** Determines which links to track for routing. Defaults to tracking every link. */
@@ -209,6 +219,9 @@ export class RouterService {
     // applies a new route to a link, which can trigger `change` events that would
     // otherwise cause the router to try to apply a new route while it's still applying the previous one.
     private applyingRoute = false;
+
+    // Serializes one-shot routing passes (see `route()`).
+    private routeChain: Promise<unknown> = Promise.resolve();
 
     private nextPinId = 100000;
     private graphListener?: mvc.Listener<[]>;
@@ -333,14 +346,15 @@ export class RouterService {
      * graph's current cells. Unlike {@link start}, this attaches no graph
      * listener - nothing keeps the graph routed as it changes afterwards.
      *
+     * @returns The {@link RoutingResult} of the pass.
      * @throws If the router is currently started (see {@link isStarted}) - call {@link stop} first.
      */
-    async routeAll(): Promise<void> {
+    routeAll(): Promise<RoutingResult> {
         if (this.isStarted) {
             throw new Error('RouterService is already started. Stop it before calling routeAll().');
         }
 
-        await this.sync(this.graph.getCells());
+        return this.route(this.graph.getCells());
     }
 
     /**
@@ -354,14 +368,48 @@ export class RouterService {
      * graph listener.
      *
      * @param cells - The cells to route; only the elements and links in this array are considered.
+     * @returns The {@link RoutingResult} of the pass.
      * @throws If the router is currently started (see {@link isStarted}) - call {@link stop} first.
      */
-    async routeSubgraph(cells: dia.Cell[]): Promise<void> {
+    routeSubgraph(cells: dia.Cell[]): Promise<RoutingResult> {
         if (this.isStarted) {
             throw new Error('RouterService is already started. Stop it before calling routeSubgraph().');
         }
 
-        await this.sync(cells);
+        return this.route(cells);
+    }
+
+    /**
+     * Runs a one-shot routing pass over `cells`. A pass interrupted by
+     * {@link destroy} - whether still queued or already waiting on the
+     * provider - resolves with `{ status: 'cancelled' }` instead of
+     * rejecting, so fire-and-forget callers are not left with unhandled
+     * rejections; provider errors unrelated to destruction still reject.
+     *
+     * Passes run strictly one after another: a pass invoked while another
+     * is still in flight waits for it, since each pass replaces the
+     * provider's entire content.
+     *
+     * @param cells - The cells to route.
+     * @returns The result of the pass.
+     */
+    private route(cells: dia.Cell[]): Promise<RoutingResult> {
+        const run = this.routeChain.then(() => this.performRoute(cells));
+        this.routeChain = run.catch(() => {});
+        return run;
+    }
+
+    private async performRoute(cells: dia.Cell[]): Promise<RoutingResult> {
+        if (this.destroyed) return { status: 'cancelled' };
+
+        try {
+            await this.sync(cells);
+        } catch (error) {
+            if (this.destroyed) return { status: 'cancelled' };
+            throw error;
+        }
+
+        return { status: 'done' };
     }
 
     /**
