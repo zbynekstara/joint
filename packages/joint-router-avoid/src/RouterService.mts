@@ -304,10 +304,22 @@ export class RouterService {
         this.stop();
 
         const listener = new mvc.Listener<[]>();
+        // Listens to the per-attribute `change:*` events, NOT the catch-all
+        // `change` event: `change:*` events fire synchronously inside
+        // `cell.set()`, while the catch-all `change` of a nested `set()` (one
+        // made from within a change listener, e.g. a `setRouteAttributes`
+        // callback) is deferred and delivered only after the outer `set()`
+        // finishes - by which point the `applyingRoute` guard has been
+        // released and the router would treat its own write as a consumer
+        // change (an infinite routing loop, when the callback does not pass
+        // the `changeFlag`).
         listener.listenTo(this.graph, {
             remove: (cell: dia.Cell) => this.onCellRemoved(cell),
             add: (cell: dia.Cell) => this.onCellAdded(cell),
-            change: (cell: dia.Cell, opt: dia.Cell.Options) => this.onCellChanged(cell, opt),
+            'change:source': (link: dia.Link, _end: unknown, opt: dia.Cell.Options) => this.onLinkEndChanged(link, opt),
+            'change:target': (link: dia.Link, _end: unknown, opt: dia.Cell.Options) => this.onLinkEndChanged(link, opt),
+            'change:position': (element: dia.Element, _position: unknown, opt: dia.Cell.Options) => this.onElementGeometryChanged(element, opt),
+            'change:size': (element: dia.Element, _size: unknown, opt: dia.Cell.Options) => this.onElementGeometryChanged(element, opt),
             reset: () => this.backgroundSync(),
         });
 
@@ -490,47 +502,52 @@ export class RouterService {
     }
 
     /**
-     * Handles a cell's attributes changing: re-registers its avoid
-     * shape/connector, and re-routes any links affected by the change.
+     * Handles a link's source/target changing: re-registers its avoid
+     * connector and re-routes it.
      *
-     * @param cell - The cell that changed.
+     * @param link - The link whose end changed.
      * @param opt - The options the change was made with; changes flagged with {@link changeFlag} (this instance's own writes) are ignored.
      */
-    private onCellChanged(cell: dia.Cell, opt: dia.Cell.Options = {}): void {
+    private onLinkEndChanged(link: dia.Link, opt: dia.Cell.Options = {}): void {
         if (opt[this.changeFlag] || this.applyingRoute) return;
 
-        if ('source' in cell.changed || 'target' in cell.changed) {
-            if (!cell.isLink() || !this.trackLink({ link: cell })) return;
+        if (!this.trackLink({ link })) return;
 
-            if (!this.validateEnds(cell)) {
-                // Giving up on avoid for this change - hand off to the
-                // consumer via `interceptUnroutableLink`, or fall back to the
-                // built-in rightAngle route.
-                this.resolveUnroutableLink(cell);
-                this.provider.deleteConnector(cell.id);
+        if (!this.validateEnds(link)) {
+            // Giving up on avoid for this change - hand off to the
+            // consumer via `interceptUnroutableLink`, or fall back to the
+            // built-in rightAngle route.
+            this.resolveUnroutableLink(link);
+            this.provider.deleteConnector(link.id);
+            return;
+        }
+
+        this.applyFallbackRoute(link, { routing: true });
+        this.provider.setConnector(this.getAvoidConnector(link));
+    }
+
+    /**
+     * Handles an element's position/size changing: re-registers its avoid
+     * shape, and re-routes the links connected to it.
+     *
+     * @param element - The element that changed.
+     * @param opt - The options the change was made with; changes flagged with {@link changeFlag} (this instance's own writes) are ignored.
+     */
+    private onElementGeometryChanged(element: dia.Element, opt: dia.Cell.Options = {}): void {
+        if (opt[this.changeFlag] || this.applyingRoute) return;
+
+        this.graph.getConnectedLinks(element).filter((link) => this.trackLink({ link })).forEach((link) => {
+            if (!this.validateEnds(link)) {
+                this.resolveUnroutableLink(link);
                 return;
             }
 
-            this.applyFallbackRoute(cell, { routing: true });
-            this.provider.setConnector(this.getAvoidConnector(cell));
-        }
+            this.applyFallbackRoute(link, { routing: true });
+        });
 
-        if ('position' in cell.changed || 'size' in cell.changed) {
-            if (!cell.isElement()) return;
+        if (!this.trackElement({ element })) return;
 
-            this.graph.getConnectedLinks(cell).filter((link) => this.trackLink({ link })).forEach((link) => {
-                if (!this.validateEnds(link)) {
-                    this.resolveUnroutableLink(link);
-                    return;
-                }
-
-                this.applyFallbackRoute(link, { routing: true });
-            });
-
-            if (!this.trackElement({ element: cell })) return;
-
-            this.provider.setShape(this.getAvoidShape(cell));
-        }
+        this.provider.setShape(this.getAvoidShape(element));
     }
 
     /**
